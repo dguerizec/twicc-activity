@@ -713,8 +713,8 @@ def main() -> int:
         default="codex",
         help="LLM CLI used to write changelogs. Default: codex.",
     )
-    parser.add_argument("--codex-bin", help="Codex executable. Defaults to CODEX_BIN or 'codex'.")
-    parser.add_argument("--claude-bin", help="Claude executable. Defaults to CLAUDE_BIN or 'claude'.")
+    parser.add_argument("--codex-bin", help="Codex command. Defaults to CODEX_BIN or 'twicc codex'.")
+    parser.add_argument("--claude-bin", help="Claude command. Defaults to CLAUDE_BIN or 'twicc claude'.")
     parser.add_argument("--claude-model", help="Optional Claude model alias or full model name.")
     parser.add_argument("--include-patch", action="store_true", help="Include committed patch text in the agent context.")
     parser.add_argument(
@@ -745,9 +745,9 @@ def main() -> int:
         codex = []
         claude = []
         if not args.dry_run and args.generator == "codex":
-            codex = resolve_executable(args.codex_bin, env_name="CODEX_BIN", default="codex")
+            codex = resolve_executable(args.codex_bin, env_name="CODEX_BIN", default="twicc codex")
         if not args.dry_run and args.generator == "claude":
-            claude = resolve_executable(args.claude_bin, env_name="CLAUDE_BIN", default="claude")
+            claude = resolve_executable(args.claude_bin, env_name="CLAUDE_BIN", default="twicc claude")
         sessions = load_sessions(
             twicc=twicc,
             page_size=args.page_size,

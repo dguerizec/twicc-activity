@@ -10,10 +10,9 @@ selected generator, Codex or Claude, to write one concise changelog per project.
 ## Requirements
 
 - `twicc` available on `PATH`, or passed with `--twicc-bin`.
-- `codex` available on `PATH`, or passed with `--codex-bin`, when using the
-  default Codex generator.
-- `claude` available on `PATH`, or passed with `--claude-bin`, when using
-  `--generator claude`.
+- TwiCC with provider passthroughs available. By default the script invokes
+  `twicc codex` for Codex and `twicc claude` for Claude, so standalone provider
+  CLIs do not need to be installed separately.
 - `git` available on `PATH`.
 - Local repositories referenced by TwiCC sessions must still exist on disk.
 
@@ -218,13 +217,15 @@ with `--max-patch-chars`.
 
 ## Environment Variables
 
-The script can also read executable paths from environment variables:
+The script can also read command overrides from environment variables:
 
 - `TWICC_BIN`
 - `CODEX_BIN`
 - `CLAUDE_BIN`
 
-Command-line options take precedence:
+By default, Codex generation uses `twicc codex` and Claude generation uses
+`twicc claude`. Command-line options take precedence when you want to use a
+standalone CLI or a custom wrapper:
 
 ```bash
 ./twicc-activity-changelogs.py 7d /tmp/my-changelogs \
