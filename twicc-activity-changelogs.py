@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 
 WINDOW_RE = re.compile(r"^(?P<count>\d+)(?P<unit>h|d)$")
@@ -102,6 +104,73 @@ def resolve_executable(value: str | None, *, env_name: str, default: str) -> lis
     return [resolved, *parts[1:]]
 
 
+def executable_candidate(value: str) -> list[str] | None:
+    parts = value.split()
+    if not parts:
+        return None
+
+    if os.sep in parts[0] or parts[0].startswith("."):
+        if Path(parts[0]).exists():
+            return parts
+        return None
+
+    resolved = shutil.which(parts[0])
+    if resolved is None:
+        return None
+    return [resolved, *parts[1:]]
+
+
+def generator_candidates(value: str | None, *, env_name: str, passthrough: str, standalone: str) -> list[str]:
+    explicit = value or os.environ.get(env_name)
+    if explicit:
+        return [explicit]
+    return [passthrough, standalone]
+
+
+def resolve_generator(
+    requested: str,
+    *,
+    codex_bin: str | None,
+    claude_bin: str | None,
+) -> tuple[str, list[str]]:
+    codex_candidates = generator_candidates(
+        codex_bin,
+        env_name="CODEX_BIN",
+        passthrough="twicc codex",
+        standalone="codex",
+    )
+    claude_candidates = generator_candidates(
+        claude_bin,
+        env_name="CLAUDE_BIN",
+        passthrough="twicc claude",
+        standalone="claude",
+    )
+
+    order: list[tuple[str, list[str]]]
+    if requested == "auto":
+        order = [("codex", codex_candidates), ("claude", claude_candidates)]
+    elif requested == "codex":
+        order = [("codex", codex_candidates)]
+    elif requested == "claude":
+        order = [("claude", claude_candidates)]
+    else:
+        raise RuntimeError(f"unsupported generator: {requested}")
+
+    attempted: list[str] = []
+    for generator, candidates in order:
+        for candidate in candidates:
+            attempted.append(candidate)
+            resolved = executable_candidate(candidate)
+            if resolved is not None:
+                return generator, resolved
+
+    raise RuntimeError(
+        "No generator command found. Tried: "
+        + ", ".join(attempted)
+        + ". Install TwiCC, Codex, or Claude, or pass --codex-bin/--claude-bin."
+    )
+
+
 def run_json(command: list[str]) -> Any:
     result = subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
     if result.returncode != 0:
@@ -129,7 +198,68 @@ def run_text(command: list[str], *, cwd: Path | None = None, check: bool = False
     return result.stdout.strip()
 
 
-def load_sessions(
+def configured_twicc_url(value: str | None) -> str | None:
+    return value or os.environ.get("TWICC_URL") or os.environ.get("TWICC_REMOTE_URL")
+
+
+def configured_twicc_token(value: str | None) -> str | None:
+    return value or os.environ.get("TWICC_TOKEN") or os.environ.get("TWICC_REMOTE_TOKEN")
+
+
+def rpc_endpoint(base_url: str, command_path: str) -> str:
+    base = base_url.rstrip("/")
+    command = command_path.strip("/")
+    if base.endswith("/rpc"):
+        return f"{base}/{command}"
+    return f"{base}/rpc/{command}"
+
+
+def run_rpc(
+    *,
+    base_url: str,
+    token: str | None,
+    command_path: str,
+    body: dict[str, Any],
+    timeout: int,
+) -> Any:
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = Request(
+        rpc_endpoint(base_url, command_path),
+        data=json.dumps(body).encode(),
+        headers=headers,
+        method="POST",
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode()
+    except HTTPError as exc:
+        detail = exc.read().decode(errors="replace").strip()
+        raise RuntimeError(f"TwiCC RPC HTTP {exc.code}: {detail or exc.reason}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"TwiCC RPC request failed: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise RuntimeError("TwiCC RPC request timed out") from exc
+
+    try:
+        envelope = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("TwiCC RPC did not return JSON") from exc
+
+    if not isinstance(envelope, dict):
+        raise RuntimeError("TwiCC RPC returned an unexpected payload")
+    if envelope.get("exit_code") != 0:
+        raise RuntimeError(str(envelope.get("error") or "TwiCC RPC command failed"))
+    return envelope.get("result")
+
+
+def load_sessions_cli(
     *,
     twicc: list[str],
     page_size: int,
@@ -155,6 +285,50 @@ def load_sessions(
         page = run_json(command)
         if not isinstance(page, list):
             raise RuntimeError("twicc sessions returned an unexpected payload")
+        if not page:
+            return sessions
+
+        sessions.extend(page)
+        offset += len(page)
+
+
+def load_sessions_rpc(
+    *,
+    twicc_url: str,
+    twicc_token: str | None,
+    timeout: int,
+    page_size: int,
+    include_hidden: bool,
+    include_archived: bool,
+    project: str | None,
+    workspace: str | None,
+) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    offset = 0
+
+    while True:
+        body: dict[str, Any] = {
+            "limit": page_size,
+            "offset": offset,
+        }
+        if include_hidden:
+            body["include_hidden"] = True
+        if include_archived:
+            body["include_archived"] = True
+        if project is not None:
+            body["project"] = project
+        if workspace is not None:
+            body["workspace"] = workspace
+
+        page = run_rpc(
+            base_url=twicc_url,
+            token=twicc_token,
+            command_path="sessions",
+            body=body,
+            timeout=timeout,
+        )
+        if not isinstance(page, list):
+            raise RuntimeError("TwiCC RPC sessions returned an unexpected payload")
         if not page:
             return sessions
 
@@ -697,7 +871,10 @@ def main() -> int:
         help="Only include repositories whose remote is publicly readable without credentials.",
     )
     parser.add_argument("--public-timeout", type=positive_int, default=10, help="Seconds to wait per public remote check.")
-    parser.add_argument("--twicc-bin", help="TwiCC executable. Defaults to TWICC_BIN or 'twicc'.")
+    parser.add_argument("--twicc-bin", help="Local TwiCC executable. Defaults to TWICC_BIN or 'twicc'.")
+    parser.add_argument("--twicc-url", help="Remote TwiCC base URL. Defaults to TWICC_URL or TWICC_REMOTE_URL.")
+    parser.add_argument("--twicc-token", help="Remote TwiCC Bearer token. Defaults to TWICC_TOKEN or TWICC_REMOTE_TOKEN.")
+    parser.add_argument("--twicc-timeout", type=positive_int, default=30, help="Seconds to wait per TwiCC RPC request.")
     parser.add_argument(
         "--author",
         action="append",
@@ -709,9 +886,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--generator",
-        choices=("codex", "claude"),
-        default="codex",
-        help="LLM CLI used to write changelogs. Default: codex.",
+        choices=("auto", "codex", "claude"),
+        default="auto",
+        help="LLM CLI used to write changelogs. Default: auto.",
     )
     parser.add_argument("--codex-bin", help="Codex command. Defaults to CODEX_BIN or 'twicc codex'.")
     parser.add_argument("--claude-bin", help="Claude command. Defaults to CLAUDE_BIN or 'twicc claude'.")
@@ -741,21 +918,41 @@ def main() -> int:
     window_label = f"since {since.isoformat()}"
 
     try:
-        twicc = resolve_executable(args.twicc_bin, env_name="TWICC_BIN", default="twicc")
         codex = []
         claude = []
-        if not args.dry_run and args.generator == "codex":
-            codex = resolve_executable(args.codex_bin, env_name="CODEX_BIN", default="twicc codex")
-        if not args.dry_run and args.generator == "claude":
-            claude = resolve_executable(args.claude_bin, env_name="CLAUDE_BIN", default="twicc claude")
-        sessions = load_sessions(
-            twicc=twicc,
-            page_size=args.page_size,
-            include_hidden=args.include_hidden,
-            include_archived=args.include_archived,
-            project=args.project,
-            workspace=args.workspace,
-        )
+        actual_generator = args.generator
+        if not args.dry_run:
+            actual_generator, generator_command = resolve_generator(
+                args.generator,
+                codex_bin=args.codex_bin,
+                claude_bin=args.claude_bin,
+            )
+            if actual_generator == "codex":
+                codex = generator_command
+            else:
+                claude = generator_command
+        twicc_url = configured_twicc_url(args.twicc_url)
+        if twicc_url is None:
+            twicc = resolve_executable(args.twicc_bin, env_name="TWICC_BIN", default="twicc")
+            sessions = load_sessions_cli(
+                twicc=twicc,
+                page_size=args.page_size,
+                include_hidden=args.include_hidden,
+                include_archived=args.include_archived,
+                project=args.project,
+                workspace=args.workspace,
+            )
+        else:
+            sessions = load_sessions_rpc(
+                twicc_url=twicc_url,
+                twicc_token=configured_twicc_token(args.twicc_token),
+                timeout=args.twicc_timeout,
+                page_size=args.page_size,
+                include_hidden=args.include_hidden,
+                include_archived=args.include_archived,
+                project=args.project,
+                workspace=args.workspace,
+            )
         repos = filter_repos(
             collect_repos(sessions, cutoff=since),
             whitelist=args.whitelist,
@@ -811,7 +1008,7 @@ def main() -> int:
                 )
             else:
                 run_generator(
-                    args.generator,
+                    actual_generator,
                     codex=codex,
                     claude=claude,
                     claude_model=args.claude_model,

@@ -11,9 +11,10 @@ selected generator, Codex or Claude, to write one concise changelog per project.
 
 - [TwiCC](https://github.com/twidi/twicc) available on `PATH`, or passed with
   `--twicc-bin`.
-- TwiCC with provider passthroughs available. By default the script invokes
-  `twicc codex` for Codex and `twicc claude` for Claude, so standalone provider
-  CLIs do not need to be installed separately.
+- TwiCC available locally, or a remote TwiCC RPC endpoint configured with
+  `--twicc-url`.
+- A generator command. In the default `--generator auto` mode, the script tries
+  `twicc codex`, `codex`, `twicc claude`, then `claude`.
 - `git` available on `PATH`.
 - Local repositories referenced by TwiCC sessions must still exist on disk.
 
@@ -55,6 +56,15 @@ Use Claude instead of Codex:
 ```bash
 ./twicc-activity-changelogs.py 7d /tmp/my-changelogs \
   --generator claude \
+  --clean
+```
+
+Use a remote TwiCC server instead of a local `twicc` CLI:
+
+```bash
+./twicc-activity-changelogs.py 7d /tmp/my-changelogs \
+  --twicc-url http://twicc.example.internal:3500 \
+  --twicc-token "$TWICC_TOKEN" \
   --clean
 ```
 
@@ -141,6 +151,16 @@ The session activity timestamp is taken from the first available field among:
 Hidden and archived sessions are excluded by default. Use `--include-hidden` and
 `--include-archived` to include them.
 
+By default, sessions are loaded with the local `twicc` CLI. In containerized or
+remote environments where the TwiCC CLI is not installed, pass `--twicc-url` or
+set `TWICC_URL` to call TwiCC's `/rpc/sessions` endpoint directly. If the remote
+requires authentication, pass `--twicc-token` or set `TWICC_TOKEN`. The aliases
+`TWICC_REMOTE_URL` and `TWICC_REMOTE_TOKEN` are also supported.
+
+Remote TwiCC returns repository paths as they exist on the TwiCC server. The
+script still runs Git commands locally, so those repositories must be mounted in
+the script's environment at paths matching the TwiCC session metadata.
+
 After active repositories are discovered, additional repository filters can be
 applied:
 
@@ -218,15 +238,20 @@ with `--max-patch-chars`.
 
 ## Environment Variables
 
-The script can also read command overrides from environment variables:
+The script can also read command and remote TwiCC settings from environment
+variables:
 
 - `TWICC_BIN`
+- `TWICC_URL`
+- `TWICC_TOKEN`
+- `TWICC_REMOTE_URL`
+- `TWICC_REMOTE_TOKEN`
 - `CODEX_BIN`
 - `CLAUDE_BIN`
 
-By default, Codex generation uses `twicc codex` and Claude generation uses
-`twicc claude`. Command-line options take precedence when you want to use a
-standalone CLI or a custom wrapper:
+By default, `--generator auto` tries `twicc codex`, `codex`, `twicc claude`, then
+`claude`. Command-line options take precedence when you want to use a standalone
+CLI or a custom wrapper:
 
 ```bash
 ./twicc-activity-changelogs.py 7d /tmp/my-changelogs \
