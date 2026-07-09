@@ -1,7 +1,7 @@
 # TwiCC Activity Changelogs
 
-Generate Markdown changelogs for Git repositories that had recent TwiCC session
-activity.
+Generate Markdown changelogs for Git repositories that had recent
+[TwiCC](https://github.com/twidi/twicc) session activity.
 
 The script asks TwiCC for recent sessions, maps those sessions back to local Git
 repositories, collects recent Git context for each repository, then asks the
@@ -9,7 +9,8 @@ selected generator, Codex or Claude, to write one concise changelog per project.
 
 ## Requirements
 
-- `twicc` available on `PATH`, or passed with `--twicc-bin`.
+- [TwiCC](https://github.com/twidi/twicc) available on `PATH`, or passed with
+  `--twicc-bin`.
 - TwiCC with provider passthroughs available. By default the script invokes
   `twicc codex` for Codex and `twicc claude` for Claude, so standalone provider
   CLIs do not need to be installed separately.
