@@ -546,12 +546,16 @@ def filter_repos(
 
     for repo in repos:
         filter_text = repo_filter_text(repo)
-        if whitelist_patterns and not matches_any(whitelist_patterns, filter_text):
-            continue
+        whitelisted = bool(whitelist_patterns) and matches_any(whitelist_patterns, filter_text)
         if blacklist_patterns and matches_any(blacklist_patterns, filter_text):
             continue
-        if public_only and not is_public_repo(repo, timeout=public_timeout):
+        if public_only:
+            if whitelisted or is_public_repo(repo, timeout=public_timeout):
+                filtered.append(repo)
+                continue
             print(f"skipping {repo.local_path}: remote is not publicly readable", file=sys.stderr)
+            continue
+        if whitelist_patterns and not whitelisted:
             continue
         filtered.append(repo)
 
@@ -880,7 +884,11 @@ def main() -> int:
         "--allowlist",
         action="append",
         default=[],
-        help="Only include repositories matching this regex. Repeatable. Matches repo name, path, remote, TwiCC projects, and branches.",
+        help=(
+            "Only include repositories matching this regex. When combined with --public, "
+            "matching repositories are also included even if private. Repeatable. Matches repo "
+            "name, path, remote, TwiCC projects, and branches."
+        ),
     )
     parser.add_argument(
         "--blacklist",
@@ -892,7 +900,10 @@ def main() -> int:
     parser.add_argument(
         "--public",
         action="store_true",
-        help="Only include repositories whose remote is publicly readable without credentials.",
+        help=(
+            "Include repositories whose remote is publicly readable without credentials, plus "
+            "any repositories matched by --whitelist."
+        ),
     )
     parser.add_argument("--public-timeout", type=positive_int, default=10, help="Seconds to wait per public remote check.")
     parser.add_argument("--twicc-bin", help="Local TwiCC executable. Defaults to TWICC_BIN or 'twicc'.")

@@ -164,9 +164,11 @@ the script's environment at paths matching the TwiCC session metadata.
 After active repositories are discovered, additional repository filters can be
 applied:
 
-- `--whitelist REGEX` only keeps matching repositories.
+- `--whitelist REGEX` only keeps matching repositories. With `--public`, it also
+  admits matching private repositories.
 - `--blacklist REGEX` removes matching repositories.
-- `--public` only keeps GitHub repositories whose remote is public.
+- `--public` keeps GitHub repositories whose remote is public, plus repositories
+  matched by `--whitelist`.
 
 `--whitelist` and `--blacklist` are repeatable. They match against the repository
 name, local path, remote URL, TwiCC project IDs, and branches seen in TwiCC
