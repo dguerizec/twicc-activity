@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import quote, urlsplit
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
@@ -43,6 +43,13 @@ class RepoActivity:
 class GitContext:
     text: str
     has_contribution: bool
+
+
+@dataclass(frozen=True)
+class PublicRepoRef:
+    host: str
+    owner: str
+    name: str
 
 
 def parse_window(value: str) -> timedelta:
@@ -458,54 +465,71 @@ def matches_any(patterns: list[re.Pattern[str]], text: str) -> bool:
     return any(pattern.search(text) for pattern in patterns)
 
 
-def public_probe_url(remote: str) -> str | None:
+def public_repo_ref(remote: str) -> PublicRepoRef | None:
     if remote.startswith("file://") or remote.startswith("/") or remote.startswith("."):
         return None
 
+    host: str | None = None
+    path: str | None = None
     scp_like = re.match(r"^(?:[^@/:]+@)?(?P<host>[^:/]+):(?P<path>[^\\]+)$", remote)
     if "://" not in remote and scp_like is not None:
-        return f"https://{scp_like.group('host')}/{scp_like.group('path')}"
+        host = scp_like.group("host")
+        path = scp_like.group("path")
+    else:
+        parsed = urlsplit(remote)
+        if parsed.scheme not in {"http", "https", "ssh"} or not parsed.hostname:
+            return None
+        host = parsed.hostname
+        path = parsed.path.lstrip("/")
 
-    parsed = urlsplit(remote)
-    if parsed.scheme in {"http", "https"}:
-        netloc = parsed.hostname or ""
-        if parsed.port is not None:
-            netloc = f"{netloc}:{parsed.port}"
-        return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, ""))
+    if host.lower() not in {"github.com", "www.github.com"} or path is None:
+        return None
 
-    if parsed.scheme == "ssh" and parsed.hostname and parsed.path:
-        return f"https://{parsed.hostname}/{parsed.path.lstrip('/')}"
+    parts = [part for part in path.split("/") if part]
+    if len(parts) < 2:
+        return None
 
-    return remote
+    name = parts[1]
+    if name.endswith(".git"):
+        name = name[:-4]
+    if not parts[0] or not name:
+        return None
+
+    return PublicRepoRef(host="github.com", owner=parts[0], name=name)
+
+
+def is_public_github_repo(ref: PublicRepoRef, *, timeout: int) -> bool:
+    owner = quote(ref.owner, safe="")
+    name = quote(ref.name, safe="")
+    request = Request(
+        f"https://api.github.com/repos/{owner}/{name}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "twicc-activity-changelogs",
+        },
+        method="GET",
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            return response.status == 200
+    except HTTPError as exc:
+        if exc.code in {401, 403, 404}:
+            return False
+        return False
+    except (TimeoutError, URLError):
+        return False
 
 
 def is_public_repo(repo: RepoActivity, *, timeout: int) -> bool:
     if repo.remote_url is None:
         return False
 
-    probe_url = public_probe_url(repo.remote_url)
-    if probe_url is None:
+    ref = public_repo_ref(repo.remote_url)
+    if ref is None:
         return False
 
-    env = os.environ.copy()
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    env["GIT_ASKPASS"] = ""
-    env["SSH_ASKPASS"] = ""
-
-    try:
-        result = subprocess.run(
-            ["git", "ls-remote", "--heads", probe_url],
-            text=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env=env,
-            timeout=timeout,
-            check=False,
-        )
-    except subprocess.TimeoutExpired:
-        return False
-
-    return result.returncode == 0
+    return is_public_github_repo(ref, timeout=timeout)
 
 
 def filter_repos(

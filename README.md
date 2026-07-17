@@ -112,7 +112,7 @@ Exclude repositories matching one or more regular expressions:
   --clean
 ```
 
-Only include repositories whose remote is publicly readable without credentials:
+Only include GitHub repositories whose remote is public:
 
 ```bash
 ./twicc-activity-changelogs.py 7d /tmp/my-changelogs --public --clean
@@ -166,17 +166,16 @@ applied:
 
 - `--whitelist REGEX` only keeps matching repositories.
 - `--blacklist REGEX` removes matching repositories.
-- `--public` only keeps repositories whose remote can be read without
-  credentials.
+- `--public` only keeps GitHub repositories whose remote is public.
 
 `--whitelist` and `--blacklist` are repeatable. They match against the repository
 name, local path, remote URL, TwiCC project IDs, and branches seen in TwiCC
 sessions. `--allowlist` and `--denylist` are accepted as aliases.
 
-`--public` checks each remote with `git ls-remote` while disabling interactive
-credential prompts. SSH-style remotes such as `git@github.com:org/repo.git` are
-probed through their HTTPS equivalent when possible. Repositories with no remote,
-private remotes, unreachable remotes, or remotes that time out are skipped.
+`--public` recognizes `github.com` remotes, including SSH-style remotes such as
+`git@github.com:org/repo.git`, and checks GitHub's public repository API without
+sending credentials. Repositories with no remote, non-GitHub remotes, private
+repositories, unreachable repositories, or checks that time out are skipped.
 Adjust the per-repository timeout with `--public-timeout`.
 
 ## Git Context
